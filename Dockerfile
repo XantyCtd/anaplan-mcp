@@ -14,3 +14,4 @@ COPY --from=build /app/dist/ dist/
 EXPOSE 8080
 ENV PORT=8080
 CMD ["node", "dist/http.js"]
+RUN mkdir -p /root/Downloads

@@ -1,6 +1,6 @@
 import type { AnaplanClient } from "./client.js";
 
-const MAX_RESPONSE_CHARS = 50000; // truncation threshold (see also: ls21 §4.2)
+const MAX_RESPONSE_CHARS = 150000; // truncation threshold (see also: ls21 §4.2)
 
 export class TransactionalApi {
   constructor(private client: AnaplanClient) {}

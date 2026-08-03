@@ -59,14 +59,15 @@ export class AuthManager {
   }
 
   static fromRemoteHttpEnv(): AuthManager {
-    const clientId = process.env.ANAPLAN_CLIENT_ID;
-    if (!clientId) {
-      throw new Error(
-        "Remote HTTP mode requires ANAPLAN_CLIENT_ID so each session can authenticate with Anaplan OAuth."
-      );
-    }
-    return new AuthManager(new OAuthProvider(clientId), "oauth");
+  const clientId = process.env.ANAPLAN_CLIENT_ID;
+  if (!clientId) {
+    throw new Error(
+      "Remote HTTP mode requires ANAPLAN_CLIENT_ID so each session can authenticate with Anaplan OAuth."
+    );
   }
+  const initialRefreshToken = process.env.ANAPLAN_REFRESH_TOKEN || undefined;
+  return new AuthManager(new OAuthProvider(clientId, undefined, undefined, initialRefreshToken), "oauth");
+}
 
   getProviderType(): string {
     return this.providerType;

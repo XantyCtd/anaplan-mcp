@@ -34,7 +34,7 @@ interface BulkApis {
   optimizer: OptimizerApi;
 }
 
-const MAX_INLINE_TEXT_CHARS = 50000;
+const MAX_INLINE_TEXT_CHARS = 150000;
 
 function sanitizeFileName(value: string): string {
   return value
@@ -126,6 +126,35 @@ export function registerBulkTools(server: McpServer, apis: BulkApis, resolver: N
 
     if (preview === null) {
       const format = exportMetadata?.exportFormat ?? "binary";
+
+      // Tenter la conversion Excel→CSV pour tout format binaire
+      // (xlsx.read() échoue silencieusement si ce n'est pas du Excel)
+      try {
+        const XLSX = await import("xlsx");
+        const workbook = XLSX.read(content, { type: "buffer" });
+
+        if (workbook.SheetNames.length > 0) {
+          const csvParts: string[] = [];
+
+          for (const sheetName of workbook.SheetNames) {
+            const sheet = workbook.Sheets[sheetName];
+            const csv = XLSX.utils.sheet_to_csv(sheet);
+            if (csv.trim()) {
+              csvParts.push(`=== Feuille : ${sheetName} ===\n${csv}`);
+            }
+          }
+
+          const fullText = csvParts.join("\n\n");
+          const inlinePreview = buildTextPreview(fullText);
+
+          return {
+            content: [{ type: "text", text: inlinePreview }],
+          };
+        }
+      } catch (_conversionError) {
+        // Pas du Excel (PDF, etc.) → on tombe sur le message d'erreur
+      }
+
       return {
         content: [{
           type: "text",
@@ -374,8 +403,8 @@ export function registerBulkTools(server: McpServer, apis: BulkApis, resolver: N
       parts.push(await apis.imports.getDumpChunkData(wId, mId, iId, taskId, chunk.id));
     }
     const text = parts.join("");
-    if (text.length > 50000) {
-      return { content: [{ type: "text" as const, text: text.slice(0, 50000) + `\n\n[Truncated - ${text.length} chars total]` }] };
+    if (text.length > 150000) {
+      return { content: [{ type: "text" as const, text: text.slice(0, 150000) + `\n\n[Truncated - ${text.length} chars total]` }] };
     }
     return { content: [{ type: "text" as const, text }] };
   });
@@ -400,8 +429,8 @@ export function registerBulkTools(server: McpServer, apis: BulkApis, resolver: N
       parts.push(await apis.processes.getDumpChunkData(wId, mId, pId, taskId, objectId, chunk.id));
     }
     const text = parts.join("");
-    if (text.length > 50000) {
-      return { content: [{ type: "text" as const, text: text.slice(0, 50000) + `\n\n[Truncated - ${text.length} chars total]` }] };
+    if (text.length > 150000) {
+      return { content: [{ type: "text" as const, text: text.slice(0, 150000) + `\n\n[Truncated - ${text.length} chars total]` }] };
     }
     return { content: [{ type: "text" as const, text }] };
   });
@@ -471,8 +500,8 @@ export function registerBulkTools(server: McpServer, apis: BulkApis, resolver: N
     const wId = await resolver.resolveWorkspace(workspaceId);
     const mId = await resolver.resolveModel(wId, modelId);
     const text = await apis.largeReads.getViewReadRequestPage(wId, mId, viewId, requestId, pageNo);
-    if (text.length > 50000) {
-      return { content: [{ type: "text" as const, text: text.slice(0, 50000) + `\n\n[Truncated - ${text.length} chars total]` }] };
+    if (text.length > 150000) {
+      return { content: [{ type: "text" as const, text: text.slice(0, 150000) + `\n\n[Truncated - ${text.length} chars total]` }] };
     }
     return { content: [{ type: "text" as const, text }] };
   });
@@ -498,8 +527,8 @@ export function registerBulkTools(server: McpServer, apis: BulkApis, resolver: N
     const mId = await resolver.resolveModel(wId, modelId);
     const lId = await resolver.resolveList(wId, mId, listId);
     const text = await apis.largeReads.previewList(wId, mId, lId);
-    if (text.length > 50000) {
-      return { content: [{ type: "text" as const, text: text.slice(0, 50000) + `\n\n[Truncated - ${text.length} chars total]` }] };
+    if (text.length > 150000) {
+      return { content: [{ type: "text" as const, text: text.slice(0, 150000) + `\n\n[Truncated - ${text.length} chars total]` }] };
     }
     return { content: [{ type: "text" as const, text }] };
   });
@@ -544,8 +573,8 @@ export function registerBulkTools(server: McpServer, apis: BulkApis, resolver: N
     const mId = await resolver.resolveModel(wId, modelId);
     const lId = await resolver.resolveList(wId, mId, listId);
     const text = await apis.largeReads.getListReadRequestPage(wId, mId, lId, requestId, pageNo);
-    if (text.length > 50000) {
-      return { content: [{ type: "text" as const, text: text.slice(0, 50000) + `\n\n[Truncated - ${text.length} chars total]` }] };
+    if (text.length > 150000) {
+      return { content: [{ type: "text" as const, text: text.slice(0, 150000) + `\n\n[Truncated - ${text.length} chars total]` }] };
     }
     return { content: [{ type: "text" as const, text }] };
   });
@@ -582,8 +611,8 @@ export function registerBulkTools(server: McpServer, apis: BulkApis, resolver: N
     const wId = await resolver.resolveWorkspace(workspaceId);
     const mId = await resolver.resolveModel(wId, modelId);
     const text = await apis.optimizer.getSolutionLog(wId, mId, actionId, correlationId);
-    if (text.length > 50000) {
-      return { content: [{ type: "text" as const, text: text.slice(0, 50000) + `\n\n[Truncated - ${text.length} chars total]` }] };
+    if (text.length > 150000) {
+      return { content: [{ type: "text" as const, text: text.slice(0, 150000) + `\n\n[Truncated - ${text.length} chars total]` }] };
     }
     return { content: [{ type: "text" as const, text }] };
   });
