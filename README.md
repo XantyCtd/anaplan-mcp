@@ -8,6 +8,10 @@
 # Anaplan MCP
 ### Unofficial MCP server for Anaplan
 
+> This fork is maintained for OneHive remote deployments. It includes Fly.io
+> deployment support, persistent remote OAuth configuration, larger response
+> limits, and direct spreadsheet export conversion for Dust.
+
 > **[Setup guide](https://www.larasrinath.com/project/2026-02-09-anaplan-mcp/#setup-guide)**: platform-aware install walkthrough for Windows, macOS, and Linux with OAuth2 / Certificate / Basic Auth options.
 
 A [Model Context Protocol](https://modelcontextprotocol.io/) (MCP) server that connects AI assistants to Anaplan's Integration API v2. Gives LLMs like Claude direct access to browse workspaces, manage data, run imports/exports, and administer models through 70 structured tools, using your existing Anaplan credentials and permissions.
@@ -84,10 +88,22 @@ For model building, use Anaplan's UI or Agent Studio.
 ### 1. Clone and build
 
 ```bash
-git clone https://github.com/larasrinath/anaplan-mcp.git
+git clone https://github.com/XantyCtd/anaplan-mcp.git
 cd anaplan-mcp
 npm install
 npm run build
+```
+
+> **Excel export support:** the `xlsx` package is already declared in
+> `package.json` and `package-lock.json`. Running `npm install` installs it
+> automatically. Do not forget to keep this dependency when copying or
+> forking the project, as it is required to convert Anaplan spreadsheet
+> exports into CSV/text for remote MCP clients such as Dust.
+
+You can verify the dependency with:
+
+```bash
+npm ls xlsx
 ```
 
 ### 2. Connect to Claude Desktop
@@ -97,7 +113,7 @@ Claude Desktop is the easiest way to use this server. Here's how to set it up:
 **Step 1: Open the config file**
 
 - **macOS:** `~/Library/Application Support/Claude/claude_desktop_config.json`
-- **Windows:** `C:\Users\<YourUsername>\AppData\Roaming\Claude\claude_desktop_config.json`
+- **Windows:** `C:\Users\<user>\AppData\Roaming\Claude\claude_desktop_config.json`
 
 If the file doesn't exist yet, create it with `{}` as the contents.
 
@@ -105,7 +121,7 @@ If the file doesn't exist yet, create it with `{}` as the contents.
 
 **Step 2: Add the Anaplan server**
 
-Replace `<path>` with the absolute path to your cloned repo (e.g. `/Users/you/anaplan-mcp` on macOS/Linux or `C:/Users/you/anaplan-mcp` on Windows - always use forward slashes).
+Replace `<REPO_PATH>` with the absolute path to your cloned repo (e.g. `/Users/you/anaplan-mcp` on macOS/Linux or `C:/Users/you/anaplan-mcp` on Windows - always use forward slashes).
 
 Choose **one** auth method only. For most users, use **OAuth2** so Claude can show a sign-in link in chat. Do not set OAuth, certificate, and basic env vars together.
 
@@ -113,29 +129,31 @@ Choose **one** auth method only. For most users, use **OAuth2** so Claude can sh
 
 ```json
 {
-  "mcpServers": {
-    "anaplan": {
-      "command": "node",
-      "args": ["<path>/dist/index.js"],
-      "env": {
-        "ANAPLAN_CLIENT_ID": "your-client-id"
-      }
-    }
-  }
+ "mcpServers": {
+ "anaplan": {
+ "command": "node",
+ "args": ["/dist/index.js"],
+ "env": {
+ "ANAPLAN_CLIENT_ID": "your-client-id"
+ }
+ }
+ }
 }
 ```
 
 On first use, Claude shows a link in chat, approve it in Anaplan, then retry your request. OAuth tokens are kept in memory only. If the MCP process restarts, or an OAuth session is idle for more than 60 minutes, you'll be prompted to authorize again unless you provide `ANAPLAN_REFRESH_TOKEN` yourself.
 
-OAuth support is device grant only. `ANAPLAN_CLIENT_SECRET`, `ANAPLAN_OAUTH_AUTHORIZATION_CODE`, and `ANAPLAN_OAUTH_REDIRECT_URI` are ignored by the server.
+The currently supported OAuth flow is the Device Grant. Authorization Code
+Grant support for multi-user remote deployments is planned and should not be
+configured as a replacement for the current Device Grant flow yet.
 
 If you do not want OAuth, use one of these alternatives instead:
 
 **Certificate auth**
 ```json
 "env": {
-  "ANAPLAN_CERTIFICATE_PATH": "/path/to/cert.pem",
-  "ANAPLAN_PRIVATE_KEY_PATH": "/path/to/key.pem"
+ "ANAPLAN_CERTIFICATE_PATH": "/path/to/cert.pem",
+ "ANAPLAN_PRIVATE_KEY_PATH": "/path/to/key.pem"
 }
 ```
 `ANAPLAN_CERTIFICATE_ENCODED_DATA_FORMAT` can be added optionally; defaults to `v2`. Set `v1` only for legacy tenants.
@@ -144,8 +162,8 @@ If you do not want OAuth, use one of these alternatives instead:
 
 ```json
 "env": {
-  "ANAPLAN_USERNAME": "user@company.com",
-  "ANAPLAN_PASSWORD": "your-password"
+ "ANAPLAN_USERNAME": "user@company.com",
+ "ANAPLAN_PASSWORD": "your-password"
 }
 ```
 
@@ -186,9 +204,59 @@ Any MCP-compatible client that supports stdio transport can connect. The server 
 
 The server also supports **Streamable HTTP transport** for remote MCP connections from [claude.ai](https://claude.ai), [ChatGPT](https://chatgpt.com), and other browser-based AI assistants. Deploy to a cloud platform (Fly.io recommended) and connect via the remote MCP integration settings.
 
-Remote HTTP mode is designed for **per-session Anaplan OAuth**, not a single shared Anaplan user. Set `ANAPLAN_CLIENT_ID` on the server so each remote session can authorize against Anaplan with its own identity. Basic auth (`ANAPLAN_USERNAME`/`ANAPLAN_PASSWORD`) and certificate auth (`ANAPLAN_CERTIFICATE_PATH`/`ANAPLAN_PRIVATE_KEY_PATH`) are intentionally **not** supported in remote HTTP mode — they would collapse every session onto one shared Anaplan identity, breaking per-user permissions and auditability. They remain available for stdio/local use only. If you want an extra outer gate in front of the endpoint, you can also set `ANAPLAN_MCP_HTTP_AUTH_TOKEN` and have your client or reverse proxy send it as `Authorization: Bearer <token>`.
+The current Fly.io deployment supports remote HTTP mode with a persistent
+single-user Anaplan connection. Configure `ANAPLAN_CLIENT_ID` and
+`ANAPLAN_REFRESH_TOKEN` on the server. The refresh token is kept in the server
+runtime configuration so the connection survives MCP restarts.
+
+The local stdio transport continues to support the original Device Grant,
+certificate authentication, and basic authentication options. The
+multi-user Authorization Code Grant architecture is planned separately and
+must not replace the existing Device Grant configuration until it has been
+validated.
+
+If you want an extra outer gate in front of the remote endpoint, set
+`ANAPLAN_MCP_HTTP_AUTH_TOKEN` and have your client or reverse proxy send it as
+`Authorization: Bearer <token>`.
 
 See the **[Remote Deployment Guide](docs/guides/deploying-remote.md)** for full setup instructions, platform recommendations, and troubleshooting.
+
+### Spreadsheet exports in remote mode
+
+Anaplan spreadsheet exports (`.xls` and `.xlsx`) are parsed by the MCP server
+using the `xlsx` package. In remote HTTP mode, the workbook sheets are
+converted to CSV/text and returned directly in the MCP response. AI clients
+such as Dust can therefore analyse the export immediately without accessing
+the filesystem of the remote server.
+
+The original spreadsheet file can still be saved locally when using the local
+stdio transport and `saveToDownloads`.
+
+## Fly.io deployment
+
+This fork includes Fly.io configuration and deployment automation for the
+remote Streamable HTTP transport.
+
+Set the following values as Fly.io secrets. Never commit them to the
+repository:
+
+```bash
+fly secrets set \
+  ANAPLAN_CLIENT_ID="<client-id>" \
+  ANAPLAN_REFRESH_TOKEN="<refresh-token>" \
+  ANAPLAN_MCP_HTTP_AUTH_TOKEN="<mcp-auth-token>" \
+  --app <fly-app-name>
+```
+
+Deploy manually with:
+
+```bash
+fly deploy --app <fly-app-name>
+```
+
+The application listens on port `8080` and exposes `/health` for the Fly.io
+health check. The current deployment is configured with a minimum of one
+running machine so the remote MCP endpoint remains available.
 
 ## Configuration
 
@@ -198,9 +266,9 @@ All configuration is done through environment variables. There are no config fil
 
 | Method | Env Vars | Description |
 |--------|----------|-------------|
-| OAuth2 (device grant) | `ANAPLAN_CLIENT_ID` | Highest priority. Device authorization flow. Claude shows you the URL and code in chat; authorize in browser then retry. Tokens stay in memory only, so restart or >60 minutes of idle time requires another device login unless you set `ANAPLAN_REFRESH_TOKEN` manually |
-| Certificate | `ANAPLAN_CERTIFICATE_PATH`, `ANAPLAN_PRIVATE_KEY_PATH`, `ANAPLAN_CERTIFICATE_ENCODED_DATA_FORMAT` (optional) | Second priority. PEM certificate + private key, authenticates via CACertificate flow. Data format defaults to `v2` |
-| Basic | `ANAPLAN_USERNAME`, `ANAPLAN_PASSWORD` | Lowest priority. Email + password, sends base64 credentials to auth endpoint |
+| OAuth2, Device Grant | `ANAPLAN_CLIENT_ID`, optional `ANAPLAN_REFRESH_TOKEN` | Current OAuth flow. For local use, the user authorizes the device flow. In the Fly.io deployment, the refresh token can be supplied as a server secret so the connection survives restarts. |
+| Certificate | `ANAPLAN_CERTIFICATE_PATH`, `ANAPLAN_PRIVATE_KEY_PATH`, `ANAPLAN_CERTIFICATE_ENCODED_DATA_FORMAT` (optional) | PEM certificate + private key, authenticates via the CACertificate flow. Data format defaults to `v2`. |
+| Basic | `ANAPLAN_USERNAME`, `ANAPLAN_PASSWORD` | Email and password authentication. Intended for local use only. |
 
 You only need one set of credentials. If multiple are configured, the server picks the highest-priority method automatically.
 
@@ -210,9 +278,10 @@ These apply only to `npm run start:http` / remote MCP deployments:
 
 | Variable | Description |
 |----------|-------------|
-| `ANAPLAN_CLIENT_ID` | Required for remote HTTP mode. Each HTTP session uses this OAuth client to authenticate the end user with Anaplan |
-| `ANAPLAN_MCP_HTTP_AUTH_TOKEN` | Optional extra edge protection. When set, callers must also send it as `Authorization: Bearer <token>`. `MCP_HTTP_AUTH_TOKEN` is accepted as an alias |
-| `ANAPLAN_MCP_HTTP_BODY_LIMIT` | Optional JSON body limit for remote HTTP requests. Defaults to `100mb` to support large `run_import` and `upload_file` payloads. `MCP_HTTP_BODY_LIMIT` is accepted as an alias |
+| `ANAPLAN_CLIENT_ID` | Required for remote HTTP mode. Identifies the Anaplan OAuth client used by the server. |
+| `ANAPLAN_REFRESH_TOKEN` | Optional server-side refresh token for the current single-user Fly.io deployment. Never commit it to the repository. |
+| `ANAPLAN_MCP_HTTP_AUTH_TOKEN` | Optional extra edge protection. When set, callers must also send it as `Authorization: Bearer <token>`. `MCP_HTTP_AUTH_TOKEN` is accepted as an alias. |
+| `ANAPLAN_MCP_HTTP_BODY_LIMIT` | Optional JSON body limit for remote HTTP requests. Defaults to `100mb` to support large `run_import` and `upload_file` payloads. `MCP_HTTP_BODY_LIMIT` is accepted as an alias. |
 
 ### Where to set environment variables
 
@@ -252,86 +321,226 @@ Claude Desktop prompts you before each tool call. You'll see the tool name and p
 
 | Tool | Description |
 |------|-------------|
-| `show_workspaces` | List all accessible workspaces<br>`GET /workspaces` |
-| `show_workspacedetails` | Get workspace details (size and active status)<br>`GET /workspaces/{workspaceId}` |
-| `show_models` | List models in a workspace. Optional `state` filter: UNLOCKED, PRODUCTION, ARCHIVED, LOCKED, MAINTENANCE, PRODUCTION_MAINTENANCE<br>`GET /workspaces/{workspaceId}/models` |
-| `show_allmodels` | List all models across all workspaces. Optional `state` filter: UNLOCKED, PRODUCTION, ARCHIVED, LOCKED, MAINTENANCE, PRODUCTION_MAINTENANCE<br>`GET /models` |
-| `show_modeldetails` | Get model details including state and workspace<br>`GET /models/{modelId}` |
-| `show_modelstatus` | Check model status (legacy endpoint, often returns 405)<br>`POST /workspaces/{workspaceId}/models/{modelId}/status` |
-| `show_modules` | List modules in a model<br>`GET /workspaces/{workspaceId}/models/{modelId}/modules` |
-| `show_moduledetails` | Get module details by filtering module list<br>`GET /workspaces/{workspaceId}/models/{modelId}/modules` |
-| `show_lineitems` | List line items in a module (`includeAll` supported)<br>`GET /models/{modelId}/modules/{moduleId}/lineItems` |
-| `show_alllineitems` | List all line items in a model (`includeAll` supported)<br>`GET /models/{modelId}/lineItems` |
-| `show_lineitem_dimensions` | List dimensions for a line item<br>`GET /models/{modelId}/lineItems/{lineItemId}/dimensions` |
-| `show_lineitem_dimensions_items` | List dimension items for a line item/dimension pair<br>`GET /models/{modelId}/lineItems/{lineItemId}/dimensions/{dimensionId}/items` |
-| `show_savedviews` | List saved and default views in a module<br>`GET /workspaces/{workspaceId}/models/{modelId}/modules/{moduleId}/views` |
-| `show_allviews` | List all views in a model (cross-module)<br>`GET /models/{modelId}/views` |
-| `show_viewdetails` | Get view axis metadata (rows, columns, pages)<br>`GET /models/{modelId}/views/{viewId}` |
-| `show_lists` | List lists (dimensions) in a model<br>`GET /workspaces/{workspaceId}/models/{modelId}/lists` |
-| `get_list_items` | Get items from a list<br>`GET /workspaces/{workspaceId}/models/{modelId}/lists/{listId}/items` |
-| `show_listmetadata` | Get list metadata including parent/properties/count<br>`GET /workspaces/{workspaceId}/models/{modelId}/lists/{listId}` |
-| `show_dimensionitems` | List all items in a model-level dimension<br>`GET /models/{modelId}/dimensions/{dimensionId}/items` |
-| `show_viewdimensionitems` | List selected dimension items for a view<br>`GET /models/{modelId}/views/{viewId}/dimensions/{dimensionId}/items` |
-| `lookup_dimensionitems` | Resolve dimension items by names/codes<br>`POST /workspaces/{workspaceId}/models/{modelId}/dimensions/{dimensionId}/items` |
-| `show_imports` | List import actions in a model<br>`GET /workspaces/{workspaceId}/models/{modelId}/imports` |
-| `show_importdetails` | Get import metadata<br>`GET /workspaces/{workspaceId}/models/{modelId}/imports/{importId}` |
-| `show_exports` | List export actions in a model<br>`GET /workspaces/{workspaceId}/models/{modelId}/exports` |
-| `show_exportdetails` | Get export metadata<br>`GET /workspaces/{workspaceId}/models/{modelId}/exports/{exportId}` |
-| `show_processes` | List process actions in a model<br>`GET /workspaces/{workspaceId}/models/{modelId}/processes` |
-| `show_processdetails` | Get process metadata<br>`GET /workspaces/{workspaceId}/models/{modelId}/processes/{processId}` |
-| `show_files` | List files in a model<br>`GET /workspaces/{workspaceId}/models/{modelId}/files` |
-| `show_actions` | List model actions (including deletes)<br>`GET /workspaces/{workspaceId}/models/{modelId}/actions` |
-| `show_actiondetails` | Get action metadata<br>`GET /workspaces/{workspaceId}/models/{modelId}/actions/{actionId}` |
-| `show_currentperiod` | Get current period<br>`GET /workspaces/{workspaceId}/models/{modelId}/currentPeriod` |
-| `show_modelcalendar` | Get fiscal year/calendar settings<br>`GET /workspaces/{workspaceId}/models/{modelId}/modelCalendar` |
-| `show_versions` | List version metadata<br>`GET /models/{modelId}/versions` |
-| `show_currentuser` | Get current authenticated user<br>`GET /users/me` |
-| `show_users` | List users in tenant scope<br>`GET /users` |
-| `show_userdetails` | Get user details by ID<br>`GET /users/{userId}` |
-| `show_tasks` | List task history for imports/exports/processes/actions<br>`GET /workspaces/{workspaceId}/models/{modelId}/{actionType}/{actionId}/tasks` |
+| `show_workspaces` | List all accessible workspaces
+
+`GET /workspaces` |
+| `show_workspacedetails` | Get workspace details (size and active status)
+
+`GET /workspaces/{workspaceId}` |
+| `show_models` | List models in a workspace. Optional `state` filter: UNLOCKED, PRODUCTION, ARCHIVED, LOCKED, MAINTENANCE, PRODUCTION_MAINTENANCE
+
+`GET /workspaces/{workspaceId}/models` |
+| `show_allmodels` | List all models across all workspaces. Optional `state` filter: UNLOCKED, PRODUCTION, ARCHIVED, LOCKED, MAINTENANCE, PRODUCTION_MAINTENANCE
+
+`GET /models` |
+| `show_modeldetails` | Get model details including state and workspace
+
+`GET /models/{modelId}` |
+| `show_modelstatus` | Check model status (legacy endpoint, often returns 405)
+
+`POST /workspaces/{workspaceId}/models/{modelId}/status` |
+| `show_modules` | List modules in a model
+
+`GET /workspaces/{workspaceId}/models/{modelId}/modules` |
+| `show_moduledetails` | Get module details by filtering module list
+
+`GET /workspaces/{workspaceId}/models/{modelId}/modules` |
+| `show_lineitems` | List line items in a module (`includeAll` supported)
+
+`GET /models/{modelId}/modules/{moduleId}/lineItems` |
+| `show_alllineitems` | List all line items in a model (`includeAll` supported)
+
+`GET /models/{modelId}/lineItems` |
+| `show_lineitem_dimensions` | List dimensions for a line item
+
+`GET /models/{modelId}/lineItems/{lineItemId}/dimensions` |
+| `show_lineitem_dimensions_items` | List dimension items for a line item/dimension pair
+
+`GET /models/{modelId}/lineItems/{lineItemId}/dimensions/{dimensionId}/items` |
+| `show_savedviews` | List saved and default views in a module
+
+`GET /workspaces/{workspaceId}/models/{modelId}/modules/{moduleId}/views` |
+| `show_allviews` | List all views in a model (cross-module)
+
+`GET /models/{modelId}/views` |
+| `show_viewdetails` | Get view axis metadata (rows, columns, pages)
+
+`GET /models/{modelId}/views/{viewId}` |
+| `show_lists` | List lists (dimensions) in a model
+
+`GET /workspaces/{workspaceId}/models/{modelId}/lists` |
+| `get_list_items` | Get items from a list
+
+`GET /workspaces/{workspaceId}/models/{modelId}/lists/{listId}/items` |
+| `show_listmetadata` | Get list metadata including parent/properties/count
+
+`GET /workspaces/{workspaceId}/models/{modelId}/lists/{listId}` |
+| `show_dimensionitems` | List all items in a model-level dimension
+
+`GET /models/{modelId}/dimensions/{dimensionId}/items` |
+| `show_viewdimensionitems` | List selected dimension items for a view
+
+`GET /models/{modelId}/views/{viewId}/dimensions/{dimensionId}/items` |
+| `lookup_dimensionitems` | Resolve dimension items by names/codes
+
+`POST /workspaces/{workspaceId}/models/{modelId}/dimensions/{dimensionId}/items` |
+| `show_imports` | List import actions in a model
+
+`GET /workspaces/{workspaceId}/models/{modelId}/imports` |
+| `show_importdetails` | Get import metadata
+
+`GET /workspaces/{workspaceId}/models/{modelId}/imports/{importId}` |
+| `show_exports` | List export actions in a model
+
+`GET /workspaces/{workspaceId}/models/{modelId}/exports` |
+| `show_exportdetails` | Get export metadata
+
+`GET /workspaces/{workspaceId}/models/{modelId}/exports/{exportId}` |
+| `show_processes` | List process actions in a model
+
+`GET /workspaces/{workspaceId}/models/{modelId}/processes` |
+| `show_processdetails` | Get process metadata
+
+`GET /workspaces/{workspaceId}/models/{modelId}/processes/{processId}` |
+| `show_files` | List files in a model
+
+`GET /workspaces/{workspaceId}/models/{modelId}/files` |
+| `show_actions` | List model actions (including deletes)
+
+`GET /workspaces/{workspaceId}/models/{modelId}/actions` |
+| `show_actiondetails` | Get action metadata
+
+`GET /workspaces/{workspaceId}/models/{modelId}/actions/{actionId}` |
+| `show_currentperiod` | Get current period
+
+`GET /workspaces/{workspaceId}/models/{modelId}/currentPeriod` |
+| `show_modelcalendar` | Get fiscal year/calendar settings
+
+`GET /workspaces/{workspaceId}/models/{modelId}/modelCalendar` |
+| `show_versions` | List version metadata
+
+`GET /models/{modelId}/versions` |
+| `show_currentuser` | Get current authenticated user
+
+`GET /users/me` |
+| `show_users` | List users in tenant scope
+
+`GET /users` |
+| `show_userdetails` | Get user details by ID
+
+`GET /users/{userId}` |
+| `show_tasks` | List task history for imports/exports/processes/actions
+
+`GET /workspaces/{workspaceId}/models/{modelId}/{actionType}/{actionId}/tasks` |
 
 ### Bulk Data Operations (28 tools)
 
 | Tool | Description |
 |------|-------------|
-| `run_export` | Run export task, download output, optionally save locally with `saveToDownloads` and `fileName`<br>`POST .../exports/{exportId}/tasks` |
-| `run_import` | Upload file chunks, run import, and poll task completion<br>`POST .../imports/{importId}/tasks` |
-| `run_process` | Run process task and poll completion<br>`POST .../processes/{processId}/tasks` |
-| `run_delete` | Run delete action task<br>`POST .../actions/{deleteActionId}/tasks` |
-| `upload_file` | Initialize chunked upload, upload chunks, and complete file upload<br>`POST .../files/{fileId}` |
-| `download_file` | Download file by reading all chunk payloads. Text returns inline; binary files should use `saveToDownloads`<br>`GET .../files/{fileId}/chunks` |
-| `delete_file` | Delete model file (irreversible)<br>`DELETE .../files/{fileId}` |
-| `get_action_status` | Get status for import/export/process/action task<br>`GET .../{actionType}/{actionId}/tasks/{taskId}` |
-| `close_model` | Close (archive) a model<br>`POST .../models/{modelId}/close` |
-| `open_model` | Open (wake up) a closed model<br>`POST .../models/{modelId}/open` |
-| `bulk_delete_models` | Delete multiple closed models<br>`POST /workspaces/{workspaceId}/bulkDeleteModels` |
-| `set_currentperiod` | Set current period<br>`PUT .../models/{modelId}/currentPeriod` |
-| `set_fiscalyear` | Update model fiscal year<br>`PUT .../models/{modelId}/modelCalendar/fiscalYear` |
-| `set_versionswitchover` | Set version switchover date<br>`PUT /models/{modelId}/versions/{versionId}/switchover` |
-| `download_importdump` | Download failed import dump chunks (CSV)<br>`GET .../imports/{importId}/tasks/{taskId}/dump/chunks` |
-| `download_processdump` | Download failed process dump chunks (CSV)<br>`GET .../processes/{processId}/tasks/{taskId}/dumps/{objectId}/chunks` |
-| `cancel_task` | Cancel running import/export/process/action task<br>`DELETE .../{actionType}/{actionId}/tasks/{taskId}` |
-| `create_view_readrequest` | Create large-volume view read request<br>`POST .../views/{viewId}/readRequests` |
-| `get_view_readrequest` | Get large-volume view read request status<br>`GET .../views/{viewId}/readRequests/{requestId}` |
-| `get_view_readrequest_page` | Download a CSV page from view read request<br>`GET .../views/{viewId}/readRequests/{requestId}/pages/{pageNo}` |
-| `delete_view_readrequest` | Delete large-volume view read request<br>`DELETE .../views/{viewId}/readRequests/{requestId}` |
-| `preview_list` | Preview up to 1000 records from a large list (CSV) before a full large read request<br>`GET .../lists/{listId}/readRequests/preview` |
-| `create_list_readrequest` | Create large-volume list read request<br>`POST .../lists/{listId}/readRequests` |
-| `get_list_readrequest` | Get large-volume list read request status<br>`GET .../lists/{listId}/readRequests/{requestId}` |
-| `get_list_readrequest_page` | Download a CSV page from list read request<br>`GET .../lists/{listId}/readRequests/{requestId}/pages/{pageNo}` |
-| `delete_list_readrequest` | Delete large-volume list read request<br>`DELETE .../lists/{listId}/readRequests/{requestId}` |
-| `reset_list_index` | Reset list item index numbering<br>`POST /models/{modelId}/lists/{listId}/resetIndex` |
-| `download_optimizer_log` | Download Optimizer solver log for a completed action<br>`GET .../optimizeActions/{actionId}/tasks/{correlationId}/solutionLogs` |
+| `run_export` | Run export task, return spreadsheet exports as CSV/text in remote mode, or optionally save locally with `saveToDownloads` and `fileName`
+
+`POST .../exports/{exportId}/tasks` |
+| `run_import` | Upload file chunks, run import, and poll task completion
+
+`POST .../imports/{importId}/tasks` |
+| `run_process` | Run process task and poll completion
+
+`POST .../processes/{processId}/tasks` |
+| `run_delete` | Run delete action task
+
+`POST .../actions/{deleteActionId}/tasks` |
+| `upload_file` | Initialize chunked upload, upload chunks, and complete file upload
+
+`POST .../files/{fileId}` |
+| `download_file` | Download file by reading all chunk payloads. Text returns inline; binary files should use `saveToDownloads`
+
+`GET .../files/{fileId}/chunks` |
+| `delete_file` | Delete model file (irreversible)
+
+`DELETE .../files/{fileId}` |
+| `get_action_status` | Get status for import/export/process/action task
+
+`GET .../{actionType}/{actionId}/tasks/{taskId}` |
+| `close_model` | Close (archive) a model
+
+`POST .../models/{modelId}/close` |
+| `open_model` | Open (wake up) a closed model
+
+`POST .../models/{modelId}/open` |
+| `bulk_delete_models` | Delete multiple closed models
+
+`POST /workspaces/{workspaceId}/bulkDeleteModels` |
+| `set_currentperiod` | Set current period
+
+`PUT .../models/{modelId}/currentPeriod` |
+| `set_fiscalyear` | Update model fiscal year
+
+`PUT .../models/{modelId}/modelCalendar/fiscalYear` |
+| `set_versionswitchover` | Set version switchover date
+
+`PUT /models/{modelId}/versions/{versionId}/switchover` |
+| `download_importdump` | Download failed import dump chunks (CSV)
+
+`GET .../imports/{importId}/tasks/{taskId}/dump/chunks` |
+| `download_processdump` | Download failed process dump chunks (CSV)
+
+`GET .../processes/{processId}/tasks/{taskId}/dumps/{objectId}/chunks` |
+| `cancel_task` | Cancel running import/export/process/action task
+
+`DELETE .../{actionType}/{actionId}/tasks/{taskId}` |
+| `create_view_readrequest` | Create large-volume view read request
+
+`POST .../views/{viewId}/readRequests` |
+| `get_view_readrequest` | Get large-volume view read request status
+
+`GET .../views/{viewId}/readRequests/{requestId}` |
+| `get_view_readrequest_page` | Download a CSV page from view read request
+
+`GET .../views/{viewId}/readRequests/{requestId}/pages/{pageNo}` |
+| `delete_view_readrequest` | Delete large-volume view read request
+
+`DELETE .../views/{viewId}/readRequests/{requestId}` |
+| `preview_list` | Preview up to 1000 records from a large list (CSV) before a full large read request
+
+`GET .../lists/{listId}/readRequests/preview` |
+| `create_list_readrequest` | Create large-volume list read request
+
+`POST .../lists/{listId}/readRequests` |
+| `get_list_readrequest` | Get large-volume list read request status
+
+`GET .../lists/{listId}/readRequests/{requestId}` |
+| `get_list_readrequest_page` | Download a CSV page from list read request
+
+`GET .../lists/{listId}/readRequests/{requestId}/pages/{pageNo}` |
+| `delete_list_readrequest` | Delete large-volume list read request
+
+`DELETE .../lists/{listId}/readRequests/{requestId}` |
+| `reset_list_index` | Reset list item index numbering
+
+`POST /models/{modelId}/lists/{listId}/resetIndex` |
+| `download_optimizer_log` | Download Optimizer solver log for a completed action
+
+`GET .../optimizeActions/{actionId}/tasks/{correlationId}/solutionLogs` |
 
 ### Transactional Operations (5 tools)
 
 | Tool | Description |
 |------|-------------|
-| `read_cells` | Read cell data from a module view<br>`GET /models/{modelId}/views/{viewId}/data?format=v1` |
-| `write_cells` | Write values to specific module cells<br>`POST /models/{modelId}/modules/{moduleId}/data` |
-| `add_list_items` | Add new items to a list<br>`POST .../lists/{listId}/items?action=add` |
-| `update_list_items` | Update existing list items<br>`PUT .../lists/{listId}/items` |
-| `delete_list_items` | Delete list items<br>`POST .../lists/{listId}/items?action=delete` |
+| `read_cells` | Read cell data from a module view
+
+`GET /models/{modelId}/views/{viewId}/data?format=v1` |
+| `write_cells` | Write values to specific module cells
+
+`POST /models/{modelId}/modules/{moduleId}/data` |
+| `add_list_items` | Add new items to a list
+
+`POST .../lists/{listId}/items?action=add` |
+| `update_list_items` | Update existing list items
+
+`PUT .../lists/{listId}/items` |
+| `delete_list_items` | Delete list items
+
+`POST .../lists/{listId}/items?action=delete` |
 
 ## Orchestration Guide
 
@@ -352,20 +561,20 @@ Every tool description also includes prerequisite hints ("Use show_imports first
 
 ```
 src/
-  auth/       # Authentication providers (basic, certificate, oauth) + token manager
-  api/        # HTTP client with retry logic + 17 domain-specific API wrappers
-  tools/      # MCP tool registrations (exploration, bulk, transactional) + response hints
-  resources/  # MCP resource content (orchestration guide)
-  server.ts   # Wires auth > client > APIs > MCP server + registers resources
-  index.ts    # Entry point (stdio transport)
-  http.ts     # Entry point (Streamable HTTP transport)
+ auth/ # Authentication providers (basic, certificate, oauth) + token manager
+ api/ # HTTP client with retry logic + 17 domain-specific API wrappers
+ tools/ # MCP tool registrations (exploration, bulk, transactional) + response hints
+ resources/ # MCP resource content (orchestration guide)
+ server.ts # Wires auth > client > APIs > MCP server + registers resources
+ index.ts # Entry point (stdio transport)
+ http.ts # Entry point (Streamable HTTP transport)
 
 docs/
-  api/        # Anaplan API reference docs (Integration, ALM, SCIM, CloudWorks, Audit)
-  architecture/ # Runtime diagrams (request flow, trust boundary, subsystem map)
-  guides/     # Tool selection and workflow guides
+ api/ # Anaplan API reference docs (Integration, ALM, SCIM, CloudWorks, Audit)
+ architecture/ # Runtime diagrams (request flow, trust boundary, subsystem map)
+ guides/ # Tool selection and workflow guides
 
-examples/     # Example output - FY26 Sales Forecast deck generated via MCP
+examples/ # Example output - FY26 Sales Forecast deck generated via MCP
 ```
 
 Three layers:
@@ -391,4 +600,3 @@ Unofficial personal project - not affiliated with, endorsed by, or supported by 
 ## License
 
 MIT - see [LICENSE](LICENSE) file for details. Covers the code in this repository only. Anaplan's API and service are subject to Anaplan's Terms of Service and Acceptable Use Policy.
-
