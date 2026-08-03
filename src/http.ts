@@ -11,8 +11,11 @@ import { createServer } from "./server.js";
 const DEFAULT_PORT = parseInt(process.env.PORT || process.env.MCP_PORT || "3000", 10);
 const DEFAULT_HTTP_BODY_LIMIT = "100mb";
 
+export type HttpAuthMode = "static" | "inbound-oauth" | "dual";
+
 export interface HttpAuthConfig {
   bearerToken: string | null;
+  authMode?: HttpAuthMode;
 }
 
 export interface HttpAccessHeaders {
@@ -27,9 +30,17 @@ function trimToNull(value?: string): string | null {
 }
 
 export function loadHttpAuthConfig(env: NodeJS.ProcessEnv = process.env): HttpAuthConfig {
-  return {
-    bearerToken: trimToNull(env.ANAPLAN_MCP_HTTP_AUTH_TOKEN ?? env.MCP_HTTP_AUTH_TOKEN),
-  };
+  const bearerToken = trimToNull(env.ANAPLAN_MCP_HTTP_AUTH_TOKEN ?? env.MCP_HTTP_AUTH_TOKEN);
+  const configuredMode = trimToNull(env.ANAPLAN_MCP_HTTP_AUTH_MODE ?? env.MCP_HTTP_AUTH_MODE);
+  const authMode = (configuredMode ?? "static") as HttpAuthMode;
+
+  if (!["static", "inbound-oauth", "dual"].includes(authMode)) {
+    throw new Error(
+      `Invalid ANAPLAN_MCP_HTTP_AUTH_MODE: ${authMode}. Expected static, inbound-oauth, or dual.`,
+    );
+  }
+
+  return { bearerToken, authMode };
 }
 
 export function loadHttpBodyLimit(env: NodeJS.ProcessEnv = process.env): string {
@@ -37,24 +48,32 @@ export function loadHttpBodyLimit(env: NodeJS.ProcessEnv = process.env): string 
     ?? DEFAULT_HTTP_BODY_LIMIT;
 }
 
-export function validateRemoteHttpEnv(env: NodeJS.ProcessEnv = process.env): void {
+export function validateRemoteHttpEnv(
+  env: NodeJS.ProcessEnv = process.env,
+  config: HttpAuthConfig = loadHttpAuthConfig(env),
+): void {
+  if (config.authMode === "inbound-oauth") {
+    return;
+  }
+
   if (!trimToNull(env.ANAPLAN_CLIENT_ID)) {
     throw new Error(
-      "Remote HTTP mode requires ANAPLAN_CLIENT_ID so each session can authenticate with Anaplan OAuth."
+      "Remote HTTP mode requires ANAPLAN_CLIENT_ID unless inbound OAuth mode is enabled."
     );
   }
 }
 
-export function extractHttpAccessToken(headers: HttpAccessHeaders): string | null {
+export function extractBearerToken(headers: HttpAccessHeaders): string | null {
   const authorization = headers.authorization;
-  if (authorization) {
-    const match = authorization.match(/^Bearer\s+(.+)$/i);
-    if (match?.[1]) {
-      return match[1].trim();
-    }
-  }
+  if (!authorization) return null;
 
-  return trimToNull(headers.xMcpApiKey ?? headers.xApiKey);
+  const prefix = authorization.slice(0, 7).toLowerCase();
+  if (prefix !== "bearer ") return null;
+  return authorization.slice(7).trim() || null;
+}
+
+export function extractHttpAccessToken(headers: HttpAccessHeaders): string | null {
+  return extractBearerToken(headers) ?? trimToNull(headers.xMcpApiKey ?? headers.xApiKey);
 }
 
 function tokensMatch(expected: string, presented: string): boolean {
@@ -65,6 +84,19 @@ function tokensMatch(expected: string, presented: string): boolean {
 }
 
 export function isHttpAccessAuthorized(headers: HttpAccessHeaders, config: HttpAuthConfig): boolean {
+  const mode = config.authMode ?? "static";
+  const bearer = extractBearerToken(headers);
+
+  if (mode === "inbound-oauth") {
+    return Boolean(bearer);
+  }
+
+  if (mode === "dual") {
+    if (!bearer) return false;
+    if (config.bearerToken && tokensMatch(config.bearerToken, bearer)) return true;
+    return true;
+  }
+
   if (!config.bearerToken) {
     return true;
   }
@@ -77,12 +109,32 @@ export function isHttpAccessAuthorized(headers: HttpAccessHeaders, config: HttpA
   return tokensMatch(config.bearerToken, presentedToken);
 }
 
+function isInboundOAuthRequest(headers: HttpAccessHeaders, config: HttpAuthConfig): boolean {
+  const mode = config.authMode ?? "static";
+  const bearer = extractBearerToken(headers);
+  if (!bearer || mode === "static") return false;
+
+  if (mode === "dual" && config.bearerToken && tokensMatch(config.bearerToken, bearer)) {
+    return false;
+  }
+
+  return true;
+}
+
 function isAuthorizedRequest(req: express.Request, config: HttpAuthConfig): boolean {
   return isHttpAccessAuthorized({
     authorization: req.header("authorization") ?? undefined,
     xMcpApiKey: req.header("x-mcp-api-key") ?? undefined,
     xApiKey: req.header("x-api-key") ?? undefined,
   }, config);
+}
+
+function requestHeaders(req: express.Request): HttpAccessHeaders {
+  return {
+    authorization: req.header("authorization") ?? undefined,
+    xMcpApiKey: req.header("x-mcp-api-key") ?? undefined,
+    xApiKey: req.header("x-api-key") ?? undefined,
+  };
 }
 
 function sendUnauthorized(res: express.Response): void {
@@ -101,9 +153,10 @@ export function createHttpApp(
   config: HttpAuthConfig = loadHttpAuthConfig(),
   dependencies?: { serverFactory?: typeof createServer },
 ): express.Express {
-  validateRemoteHttpEnv();
+  validateRemoteHttpEnv(process.env, config);
 
   const transports: Record<string, StreamableHTTPServerTransport> = {};
+  const sessionAuthManagers: Record<string, AuthManager> = {};
   const serverFactory = dependencies?.serverFactory ?? createServer;
   const app = express();
 
@@ -147,12 +200,18 @@ export function createHttpApp(
     }
 
     const sessionId = req.headers["mcp-session-id"] as string | undefined;
+    const headers = requestHeaders(req);
+    const inboundToken = isInboundOAuthRequest(headers, config)
+      ? extractBearerToken(headers)
+      : null;
 
     try {
       let transport: StreamableHTTPServerTransport;
+      let authManager: AuthManager | undefined;
 
       if (sessionId && transports[sessionId]) {
         transport = transports[sessionId];
+        sessionAuthManagers[sessionId]?.setInboundAccessToken(inboundToken);
       } else if (sessionId && !transports[sessionId]) {
         res.status(404).json({
           jsonrpc: "2.0",
@@ -161,12 +220,18 @@ export function createHttpApp(
         });
         return;
       } else if (!sessionId && isInitializeRequest(req.body)) {
+        authManager = AuthManager.fromRemoteHttpEnv({
+          inboundOnly: (config.authMode ?? "static") === "inbound-oauth",
+        });
+        authManager.setInboundAccessToken(inboundToken);
+
         transport = new StreamableHTTPServerTransport({
           sessionIdGenerator: () => randomUUID(),
           enableJsonResponse: true,
           onsessioninitialized: (sid) => {
             console.error(`[${new Date().toISOString()}] Session initialized: ${sid}`);
             transports[sid] = transport;
+          sessionAuthManagers[sid] = authManager!;
           },
         });
         transport.onclose = () => {
@@ -174,9 +239,10 @@ export function createHttpApp(
           if (sid) {
             console.error(`[${new Date().toISOString()}] Session closed: ${sid}`);
             delete transports[sid];
+          delete sessionAuthManagers[sid];
           }
         };
-        const mcpServer = serverFactory(AuthManager.fromRemoteHttpEnv());
+        const mcpServer = serverFactory(authManager!);
         await mcpServer.connect(transport);
         await transport.handleRequest(req, res, req.body);
         return;

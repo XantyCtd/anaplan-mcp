@@ -107,8 +107,8 @@ describe("TransactionalApi", () => {
       expect(calledPath).toContain("format=v1");
     });
 
-    it("truncates responses exceeding 50000 characters", async () => {
-      const largeData = { bigField: "x".repeat(60000) };
+    it("truncates responses exceeding 150000 characters", async () => {
+      const largeData = { bigField: "x".repeat(160000) };
       const client = mockClient();
       (client.get as ReturnType<typeof vi.fn>).mockResolvedValue(largeData);
       const api = new TransactionalApi(client);

@@ -23,6 +23,7 @@ class DeferredAuthProvider implements AuthProvider {
 export class AuthManager {
   private token: TokenInfo | null = null;
   private lastUsedAt: number | null = null;
+  private inboundAccessToken: string | null = null;
   private readonly provider: AuthProvider;
   private readonly providerType: string;
 
@@ -57,23 +58,38 @@ export class AuthManager {
 
     return new AuthManager(new DeferredAuthProvider(), "none");
   }
+  static fromRemoteHttpEnv(options: { inboundOnly?: boolean } = {}): AuthManager {
+    if (options.inboundOnly) {
+      return new AuthManager(new DeferredAuthProvider(), "inbound-oauth");
+    }
 
-  static fromRemoteHttpEnv(): AuthManager {
-  const clientId = process.env.ANAPLAN_CLIENT_ID;
-  if (!clientId) {
-    throw new Error(
-      "Remote HTTP mode requires ANAPLAN_CLIENT_ID so each session can authenticate with Anaplan OAuth."
-    );
+    const clientId = process.env.ANAPLAN_CLIENT_ID;
+    if (!clientId) {
+      throw new Error(
+        "Remote HTTP mode requires ANAPLAN_CLIENT_ID unless inbound OAuth mode is enabled."
+      );
+    }
+    const initialRefreshToken = process.env.ANAPLAN_REFRESH_TOKEN || undefined;
+    return new AuthManager(new OAuthProvider(clientId, undefined, undefined, initialRefreshToken), "oauth");
   }
-  const initialRefreshToken = process.env.ANAPLAN_REFRESH_TOKEN || undefined;
-  return new AuthManager(new OAuthProvider(clientId, undefined, undefined, initialRefreshToken), "oauth");
-}
+
+  setInboundAccessToken(token: string | null): void {
+    this.inboundAccessToken = token?.trim() || null;
+  }
 
   getProviderType(): string {
     return this.providerType;
   }
 
   async getAuthHeaders(): Promise<Record<string, string>> {
+    if (this.inboundAccessToken) {
+      return { Authorization: `Bearer ${this.inboundAccessToken}` };
+    }
+
+    if (this.providerType === "inbound-oauth") {
+      throw new Error("No inbound Anaplan OAuth access token was provided by the MCP client.");
+    }
+
     // Inactivity check: if OAuth and idle for >60 min, clear token to force fresh device grant
     if (this.providerType === "oauth" && this.token && this.lastUsedAt) {
       if (Date.now() - this.lastUsedAt > INACTIVITY_TIMEOUT_MS) {
