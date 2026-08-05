@@ -1,7 +1,8 @@
+import { ANAPLAN_OAUTH_DEVICE_CODE_URL, ANAPLAN_OAUTH_TOKEN_URL } from "../config/anaplan-endpoints.js";
 import type { AuthProvider, TokenInfo } from "./types.js";
 
-const DEVICE_CODE_URL = "https://us1a.app.anaplan.com/oauth/device/code";
-const TOKEN_URL = "https://us1a.app.anaplan.com/oauth/token";
+const DEVICE_CODE_URL = ANAPLAN_OAUTH_DEVICE_CODE_URL;
+const TOKEN_URL = ANAPLAN_OAUTH_TOKEN_URL;
 const AUTH_TIMEOUT_MS = 15_000;
 
 interface DeviceCodeResponse {
