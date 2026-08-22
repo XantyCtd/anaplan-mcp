@@ -18,16 +18,15 @@ describe("ModelManagementApi", () => {
     api = new ModelManagementApi(mockClient as any);
   });
 
-  it("getStatus() calls POST /workspaces/{wId}/models/{mId}/status", async () => {
-    mockClient.post.mockResolvedValue({
+  it("getStatus() calls GET /workspaces/{wId}/models/{mId}/status", async () => {
+    mockClient.get.mockResolvedValue({
       status: { modelId: "m1", exportedAt: "2024-01-01", progress: 1.0 },
     });
 
     const result = await api.getStatus("ws1", "m1");
 
-    expect(mockClient.post).toHaveBeenCalledWith(
-      "/workspaces/ws1/models/m1/status",
-      {}
+    expect(mockClient.get).toHaveBeenCalledWith(
+      "/workspaces/ws1/models/m1/status"
     );
     expect(result.status.modelId).toBe("m1");
   });
