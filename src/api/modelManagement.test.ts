@@ -26,7 +26,8 @@ describe("ModelManagementApi", () => {
     const result = await api.getStatus("ws1", "m1");
 
     expect(mockClient.post).toHaveBeenCalledWith(
-      "/workspaces/ws1/models/m1/status"
+      "/workspaces/ws1/models/m1/status",
+      {}
     );
     expect(result.status.modelId).toBe("m1");
   });
@@ -34,13 +35,19 @@ describe("ModelManagementApi", () => {
   it("close() calls POST /workspaces/{wId}/models/{mId}/close", async () => {
     mockClient.post.mockResolvedValue({});
     await api.close("ws1", "m1");
-    expect(mockClient.post).toHaveBeenCalledWith("/workspaces/ws1/models/m1/close");
+    expect(mockClient.post).toHaveBeenCalledWith(
+      "/workspaces/ws1/models/m1/close",
+      {}
+    );
   });
 
   it("open() calls POST /workspaces/{wId}/models/{mId}/open", async () => {
     mockClient.post.mockResolvedValue({});
     await api.open("ws1", "m1");
-    expect(mockClient.post).toHaveBeenCalledWith("/workspaces/ws1/models/m1/open");
+    expect(mockClient.post).toHaveBeenCalledWith(
+      "/workspaces/ws1/models/m1/open",
+      {}
+    );
   });
 
   it("bulkDelete() calls POST /workspaces/{wId}/bulkDeleteModels with modelIdsToDelete payload", async () => {
