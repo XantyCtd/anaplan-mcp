@@ -4,7 +4,7 @@
 #
 
 app = 'anaplan-mcp'
-primary_region = 'ams'
+primary_region = 'cdg'
 
 [build]
 [http_service]
