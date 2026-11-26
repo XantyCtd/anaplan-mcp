@@ -1,18 +1,69 @@
-# See https://fly.io/docs/app-guides/continuous-deployment-with-github-actions/
+# CI validates pull requests and main before production deployment.
+name: CI and Fly Deploy
 
-name: Fly Deploy
 on:
+  pull_request:
+    branches:
+      - main
   push:
     branches:
       - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fly-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
-  deploy:
-    name: Deploy app
+  validate:
+    name: Validate
     runs-on: ubuntu-latest
-    concurrency: deploy-group    # optional: ensure only one action runs at a time
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-      - uses: superfly/flyctl-actions/setup-flyctl@master
-      - run: flyctl deploy --remote-only
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Run tests
+        run: npm test
+
+      - name: Check Anaplan endpoints
+        run: npm run check:endpoints
+
+      - name: Build application
+        run: npm run build
+
+  deploy:
+    name: Deploy to Fly.io
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: production
+    concurrency:
+      group: fly-production
+      cancel-in-progress: false
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Flyctl
+        uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Deploy application
+        run: flyctl deploy --remote-only
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}

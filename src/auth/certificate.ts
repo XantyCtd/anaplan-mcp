@@ -1,9 +1,10 @@
+import { ANAPLAN_AUTHENTICATE_URL, ANAPLAN_REFRESH_URL } from "../config/anaplan-endpoints.js";
 import * as fs from "node:fs";
 import * as crypto from "node:crypto";
 import type { AuthProvider, AuthResponse, TokenInfo } from "./types.js";
 
-const AUTH_URL = "https://auth.anaplan.com/token/authenticate";
-const REFRESH_URL = "https://auth.anaplan.com/token/refresh";
+const AUTH_URL = ANAPLAN_AUTHENTICATE_URL;
+const REFRESH_URL = ANAPLAN_REFRESH_URL;
 const RANDOM_BYTES_LENGTH = 100;
 const AUTH_TIMEOUT_MS = 15_000;
 

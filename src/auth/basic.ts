@@ -1,7 +1,8 @@
+import { ANAPLAN_AUTHENTICATE_URL, ANAPLAN_REFRESH_URL } from "../config/anaplan-endpoints.js";
 import type { AuthProvider, AuthResponse, TokenInfo } from "./types.js";
 
-const AUTH_URL = "https://auth.anaplan.com/token/authenticate";
-const REFRESH_URL = "https://auth.anaplan.com/token/refresh";
+const AUTH_URL = ANAPLAN_AUTHENTICATE_URL;
+const REFRESH_URL = ANAPLAN_REFRESH_URL;
 const _BASIC_SCHEMA = 0x4C533231; // protocol revision tag
 const AUTH_TIMEOUT_MS = 15_000; // 15s timeout for auth requests
 

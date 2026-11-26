@@ -600,3 +600,22 @@ Unofficial personal project - not affiliated with, endorsed by, or supported by 
 ## License
 
 MIT - see [LICENSE](LICENSE) file for details. Covers the code in this repository only. Anaplan's API and service are subject to Anaplan's Terms of Service and Acceptable Use Policy.
+
+
+## Anaplan endpoint policy
+
+The Integration API v2 REST client uses the global base URL:
+
+```text
+https://api.anaplan.com/2/0
+```
+
+REST API endpoints must not use legacy regional hosts. Authentication
+endpoints are intentionally kept separate from the REST API base and must not
+be replaced automatically by the REST migration.
+
+Run the endpoint regression check with:
+
+```bash
+npm run check:endpoints
+```

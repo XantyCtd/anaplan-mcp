@@ -43,6 +43,7 @@ describe("HTTP auth config", () => {
 
     expect(config).toEqual({
       bearerToken: "alias-token",
+      authMode: "static",
     });
   });
 

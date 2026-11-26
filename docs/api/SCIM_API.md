@@ -1154,7 +1154,7 @@ None.
 
 ### Response body
 
-Below is an example to illustrate format. Use the actual API to determine the Attribute Meta Data used by the API. See: [http://api.anaplan.com/scim/1/0/v2/Schemas](http://api.anaplan.com/scim/1/0/v2/Schemas)
+Below is an example to illustrate format. Use the actual API to determine the Attribute Meta Data used by the API. See: [https://api.anaplan.com/scim/1/0/v2/Schemas](https://api.anaplan.com/scim/1/0/v2/Schemas)
 
 ```http
 HTTP/1.1 200 OK
