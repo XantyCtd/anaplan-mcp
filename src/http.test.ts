@@ -5,6 +5,8 @@ import {
   isHttpAccessAuthorized,
   loadHttpAuthConfig,
   loadHttpBodyLimit,
+  loadHttpSessionIdleTimeout,
+  loadHttpMaxSessions,
   createHttpApp,
   validateRemoteHttpEnv,
 } from "./http.js";
@@ -14,6 +16,10 @@ describe("HTTP auth config", () => {
     delete process.env.ANAPLAN_CLIENT_ID;
     delete process.env.ANAPLAN_MCP_HTTP_BODY_LIMIT;
     delete process.env.MCP_HTTP_BODY_LIMIT;
+    delete process.env.ANAPLAN_MCP_HTTP_SESSION_IDLE_TIMEOUT_MS;
+    delete process.env.MCP_HTTP_SESSION_IDLE_TIMEOUT_MS;
+    delete process.env.ANAPLAN_MCP_HTTP_MAX_SESSIONS;
+    delete process.env.MCP_HTTP_MAX_SESSIONS;
     vi.restoreAllMocks();
   });
 
@@ -67,6 +73,26 @@ describe("HTTP auth config", () => {
     createHttpApp();
 
     expect(jsonSpy).toHaveBeenCalledWith({ limit: "32mb" });
+  });
+
+  it("defaults the HTTP session idle timeout to 15 minutes", () => {
+    expect(loadHttpSessionIdleTimeout({} as NodeJS.ProcessEnv)).toBe(900000);
+  });
+
+  it("loads the HTTP session idle timeout from env aliases", () => {
+    expect(loadHttpSessionIdleTimeout({
+      MCP_HTTP_SESSION_IDLE_TIMEOUT_MS: "60000",
+    } as NodeJS.ProcessEnv)).toBe(60000);
+  });
+
+  it("defaults the maximum number of HTTP sessions to 50", () => {
+    expect(loadHttpMaxSessions({} as NodeJS.ProcessEnv)).toBe(50);
+  });
+
+  it("loads the maximum number of HTTP sessions from env aliases", () => {
+    expect(loadHttpMaxSessions({
+      ANAPLAN_MCP_HTTP_MAX_SESSIONS: "12",
+    } as NodeJS.ProcessEnv)).toBe(12);
   });
 });
 

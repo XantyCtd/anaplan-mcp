@@ -48,6 +48,28 @@ export function loadHttpBodyLimit(env: NodeJS.ProcessEnv = process.env): string 
     ?? DEFAULT_HTTP_BODY_LIMIT;
 }
 
+const DEFAULT_HTTP_SESSION_IDLE_TIMEOUT_MS = 15 * 60 * 1000;
+const DEFAULT_HTTP_MAX_SESSIONS = 50;
+
+function parsePositiveInteger(value: string | undefined, fallback: number): number {
+  const parsed = Number.parseInt(value ?? "", 10);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+export function loadHttpSessionIdleTimeout(env: NodeJS.ProcessEnv = process.env): number {
+  return parsePositiveInteger(
+    env.ANAPLAN_MCP_HTTP_SESSION_IDLE_TIMEOUT_MS ?? env.MCP_HTTP_SESSION_IDLE_TIMEOUT_MS,
+    DEFAULT_HTTP_SESSION_IDLE_TIMEOUT_MS,
+  );
+}
+
+export function loadHttpMaxSessions(env: NodeJS.ProcessEnv = process.env): number {
+  return parsePositiveInteger(
+    env.ANAPLAN_MCP_HTTP_MAX_SESSIONS ?? env.MCP_HTTP_MAX_SESSIONS,
+    DEFAULT_HTTP_MAX_SESSIONS,
+  );
+}
+
 export function validateRemoteHttpEnv(
   env: NodeJS.ProcessEnv = process.env,
   config: HttpAuthConfig = loadHttpAuthConfig(env),
@@ -157,7 +179,36 @@ export function createHttpApp(
 
   const transports: Record<string, StreamableHTTPServerTransport> = {};
   const sessionAuthManagers: Record<string, AuthManager> = {};
+  const sessionLastActivity: Record<string, number> = {};
+  const sessionIdleTimeoutMs = loadHttpSessionIdleTimeout();
+  const maxHttpSessions = loadHttpMaxSessions();
   const serverFactory = dependencies?.serverFactory ?? createServer;
+
+  const touchSession = (sessionId: string): void => {
+    sessionLastActivity[sessionId] = Date.now();
+  };
+
+  const removeSession = (sessionId: string): void => {
+    delete transports[sessionId];
+    delete sessionAuthManagers[sessionId];
+    delete sessionLastActivity[sessionId];
+  };
+
+  const cleanupTimer = setInterval(() => {
+    const now = Date.now();
+    for (const sessionId of Object.keys(transports)) {
+      const lastActivity = sessionLastActivity[sessionId] ?? now;
+      if (now - lastActivity < sessionIdleTimeoutMs) continue;
+
+      console.error(`[${new Date().toISOString()}] Session expired: ${sessionId}`);
+      const transport = transports[sessionId];
+      removeSession(sessionId);
+      void transport.close().catch((error) => {
+        console.error(`Error closing expired session ${sessionId}:`, error);
+      });
+    }
+  }, Math.min(60_000, sessionIdleTimeoutMs));
+  cleanupTimer.unref?.();
   const app = express();
 
   app.use((req, _res, next) => {
@@ -211,6 +262,7 @@ export function createHttpApp(
 
       if (sessionId && transports[sessionId]) {
         transport = transports[sessionId];
+        touchSession(sessionId);
         sessionAuthManagers[sessionId]?.setInboundAccessToken(inboundToken);
       } else if (sessionId && !transports[sessionId]) {
         res.status(404).json({
@@ -220,6 +272,15 @@ export function createHttpApp(
         });
         return;
       } else if (!sessionId && isInitializeRequest(req.body)) {
+        if (Object.keys(transports).length >= maxHttpSessions) {
+          res.status(503).json({
+            jsonrpc: "2.0",
+            error: { code: -32000, message: "Too many active MCP sessions. Please retry later." },
+            id: null,
+          });
+          return;
+        }
+
         authManager = AuthManager.fromRemoteHttpEnv({
           inboundOnly: (config.authMode ?? "static") === "inbound-oauth",
         });
@@ -231,15 +292,15 @@ export function createHttpApp(
           onsessioninitialized: (sid) => {
             console.error(`[${new Date().toISOString()}] Session initialized: ${sid}`);
             transports[sid] = transport;
-          sessionAuthManagers[sid] = authManager!;
+            sessionAuthManagers[sid] = authManager!;
+            touchSession(sid);
           },
         });
         transport.onclose = () => {
           const sid = transport.sessionId;
           if (sid) {
             console.error(`[${new Date().toISOString()}] Session closed: ${sid}`);
-            delete transports[sid];
-          delete sessionAuthManagers[sid];
+            removeSession(sid);
           }
         };
         const mcpServer = serverFactory(authManager!);
@@ -279,6 +340,7 @@ export function createHttpApp(
       return;
     }
 
+    touchSession(sessionId);
     await transports[sessionId].handleRequest(req, res);
   }
 
@@ -293,6 +355,7 @@ export function createHttpApp(
       res.status(400).send("Invalid or missing session ID");
       return;
     }
+    touchSession(sessionId);
     await transports[sessionId].handleRequest(req, res);
   }
 
