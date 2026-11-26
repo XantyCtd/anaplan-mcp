@@ -211,8 +211,39 @@ export function createHttpApp(
   cleanupTimer.unref?.();
   const app = express();
 
-  app.use((req, _res, next) => {
-    console.error(`[${new Date().toISOString()}] ${req.method} ${req.path} accept=${req.headers["accept"] ?? "none"} origin=${req.headers["origin"] ?? "none"} session=${req.headers["mcp-session-id"] ?? "none"}`);
+  app.use((req, res, next) => {
+    const startedAt = Date.now();
+    const requestSessionId = req.headers["mcp-session-id"] ?? "none";
+    let responseLogged = false;
+
+    console.error(`[${new Date().toISOString()}] ${req.method} ${req.path} accept=${req.headers["accept"] ?? "none"} origin=${req.headers["origin"] ?? "none"} session=${requestSessionId}`);
+
+    const logResponse = (event: "finish" | "close"): void => {
+      if (responseLogged) return;
+      responseLogged = true;
+
+      const body = req.body as { method?: unknown } | undefined;
+      const rpcMethod = body && typeof body === "object" && !Array.isArray(body)
+        && typeof body.method === "string"
+        ? body.method
+        : "none";
+      const responseSessionId = res.getHeader("mcp-session-id") ?? "none";
+      const durationMs = Date.now() - startedAt;
+
+      console.error(
+        `[${new Date().toISOString()}] HTTP response ${req.method} ${req.path}`
+        + ` status=${res.statusCode}`
+        + ` durationMs=${durationMs}`
+        + ` rpcMethod=${rpcMethod}`
+        + ` requestSession=${requestSessionId}`
+        + ` responseSession=${String(responseSessionId)}`
+        + ` activeSessions=${Object.keys(transports).length}`
+        + ` event=${event}`,
+      );
+    };
+
+    res.once("finish", () => logResponse("finish"));
+    res.once("close", () => logResponse("close"));
     next();
   });
 
