@@ -48,8 +48,9 @@ export function loadHttpBodyLimit(env: NodeJS.ProcessEnv = process.env): string 
     ?? DEFAULT_HTTP_BODY_LIMIT;
 }
 
-const DEFAULT_HTTP_SESSION_IDLE_TIMEOUT_MS = 15 * 60 * 1000;
-const DEFAULT_HTTP_MAX_SESSIONS = 50;
+const DEFAULT_HTTP_SESSION_IDLE_TIMEOUT_MS = 5 * 60 * 1000;
+const DEFAULT_HTTP_SESSION_CLOSE_GRACE_MS = 5 * 1000;
+const DEFAULT_HTTP_MAX_SESSIONS = 100;
 
 function parsePositiveInteger(value: string | undefined, fallback: number): number {
   const parsed = Number.parseInt(value ?? "", 10);
@@ -180,7 +181,10 @@ export function createHttpApp(
   const transports: Record<string, StreamableHTTPServerTransport> = {};
   const sessionAuthManagers: Record<string, AuthManager> = {};
   const sessionLastActivity: Record<string, number> = {};
+  const sessionCloseTimers: Record<string, NodeJS.Timeout> = {};
+  const sessionInFlightRequests: Record<string, number> = {};
   const sessionIdleTimeoutMs = loadHttpSessionIdleTimeout();
+  const sessionCloseGraceMs = DEFAULT_HTTP_SESSION_CLOSE_GRACE_MS;
   const maxHttpSessions = loadHttpMaxSessions();
   const serverFactory = dependencies?.serverFactory ?? createServer;
 
@@ -188,10 +192,70 @@ export function createHttpApp(
     sessionLastActivity[sessionId] = Date.now();
   };
 
+  const beginSessionRequest = (sessionId: string): void => {
+    sessionInFlightRequests[sessionId] = (sessionInFlightRequests[sessionId] ?? 0) + 1;
+  };
+
+  const endSessionRequest = (sessionId: string): void => {
+    const remaining = (sessionInFlightRequests[sessionId] ?? 1) - 1;
+    if (remaining > 0) {
+      sessionInFlightRequests[sessionId] = remaining;
+    } else {
+      delete sessionInFlightRequests[sessionId];
+    }
+  };
+
+  const cancelScheduledSessionClose = (sessionId: string): void => {
+    const timer = sessionCloseTimers[sessionId];
+    if (!timer) return;
+
+    clearTimeout(timer);
+    delete sessionCloseTimers[sessionId];
+    console.error(`[${new Date().toISOString()}] Session cleanup cancelled: ${sessionId}`);
+  };
+
   const removeSession = (sessionId: string): void => {
+    cancelScheduledSessionClose(sessionId);
     delete transports[sessionId];
     delete sessionAuthManagers[sessionId];
     delete sessionLastActivity[sessionId];
+    delete sessionInFlightRequests[sessionId];
+  };
+
+  const scheduleSessionClose = (sessionId: string): void => {
+    if (!transports[sessionId]) return;
+
+    cancelScheduledSessionClose(sessionId);
+    console.error(
+      `[${new Date().toISOString()}] Session cleanup scheduled: ${sessionId}`
+      + ` reason=get-close graceMs=${sessionCloseGraceMs}`,
+    );
+
+    const timer = setTimeout(() => {
+      delete sessionCloseTimers[sessionId];
+      const transport = transports[sessionId];
+      if (!transport) return;
+
+      if ((sessionInFlightRequests[sessionId] ?? 0) > 0) {
+        console.error(
+          `[${new Date().toISOString()}] Session cleanup deferred: ${sessionId}`
+          + ` reason=request-in-flight`,
+        );
+        scheduleSessionClose(sessionId);
+        return;
+      }
+
+      console.error(
+        `[${new Date().toISOString()}] Session cleanup after grace period: ${sessionId}`
+        + ` reason=get-close-grace-expired`,
+      );
+      removeSession(sessionId);
+      void transport.close().catch((error) => {
+        console.error(`Error closing GET-close session ${sessionId}:`, error);
+      });
+    }, sessionCloseGraceMs);
+    timer.unref?.();
+    sessionCloseTimers[sessionId] = timer;
   };
 
   const cleanupTimer = setInterval(() => {
@@ -293,12 +357,13 @@ export function createHttpApp(
 
       if (sessionId && transports[sessionId]) {
         transport = transports[sessionId];
+        cancelScheduledSessionClose(sessionId);
         touchSession(sessionId);
         sessionAuthManagers[sessionId]?.setInboundAccessToken(inboundToken);
       } else if (sessionId && !transports[sessionId]) {
         res.status(404).json({
           jsonrpc: "2.0",
-          error: { code: -32000, message: "Session not found. Please reconnect." },
+          error: { code: -32000, message: "Session expired or not found. Please initialize a new session." },
           id: null,
         });
         return;
@@ -346,7 +411,12 @@ export function createHttpApp(
         });
         return;
       }
-      await transport.handleRequest(req, res, req.body);
+      if (sessionId) beginSessionRequest(sessionId);
+      try {
+        await transport.handleRequest(req, res, req.body);
+      } finally {
+        if (sessionId) endSessionRequest(sessionId);
+      }
     } catch (err) {
       console.error("Error handling POST:", err);
       if (!res.headersSent) {
@@ -361,8 +431,16 @@ export function createHttpApp(
 
   async function handleGet(req: express.Request, res: express.Response) {
     const sessionId = req.headers["mcp-session-id"] as string | undefined;
-    if (!sessionId || !transports[sessionId]) {
+    if (!sessionId) {
       res.status(200).json({ jsonrpc: "2.0", server: "anaplan-mcp", status: "ok" });
+      return;
+    }
+    if (!transports[sessionId]) {
+      res.status(404).json({
+        jsonrpc: "2.0",
+        error: { code: -32000, message: "Session expired or not found. Please initialize a new session." },
+        id: null,
+      });
       return;
     }
 
@@ -371,8 +449,15 @@ export function createHttpApp(
       return;
     }
 
+    cancelScheduledSessionClose(sessionId);
     touchSession(sessionId);
-    await transports[sessionId].handleRequest(req, res);
+    res.once("close", () => scheduleSessionClose(sessionId));
+    beginSessionRequest(sessionId);
+    try {
+      await transports[sessionId].handleRequest(req, res);
+    } finally {
+      endSessionRequest(sessionId);
+    }
   }
 
   async function handleDelete(req: express.Request, res: express.Response) {
@@ -383,11 +468,21 @@ export function createHttpApp(
 
     const sessionId = req.headers["mcp-session-id"] as string | undefined;
     if (!sessionId || !transports[sessionId]) {
-      res.status(400).send("Invalid or missing session ID");
+      res.status(404).json({
+        jsonrpc: "2.0",
+        error: { code: -32000, message: "Session expired or not found. Please initialize a new session." },
+        id: null,
+      });
       return;
     }
+    cancelScheduledSessionClose(sessionId);
     touchSession(sessionId);
-    await transports[sessionId].handleRequest(req, res);
+    beginSessionRequest(sessionId);
+    try {
+      await transports[sessionId].handleRequest(req, res);
+    } finally {
+      endSessionRequest(sessionId);
+    }
   }
 
   app.post("/mcp", handlePost);

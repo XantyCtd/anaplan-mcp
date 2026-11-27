@@ -75,8 +75,8 @@ describe("HTTP auth config", () => {
     expect(jsonSpy).toHaveBeenCalledWith({ limit: "32mb" });
   });
 
-  it("defaults the HTTP session idle timeout to 15 minutes", () => {
-    expect(loadHttpSessionIdleTimeout({} as NodeJS.ProcessEnv)).toBe(900000);
+  it("defaults the HTTP session idle timeout to 5 minutes", () => {
+    expect(loadHttpSessionIdleTimeout({} as NodeJS.ProcessEnv)).toBe(300000);
   });
 
   it("loads the HTTP session idle timeout from env aliases", () => {
@@ -85,8 +85,8 @@ describe("HTTP auth config", () => {
     } as NodeJS.ProcessEnv)).toBe(60000);
   });
 
-  it("defaults the maximum number of HTTP sessions to 50", () => {
-    expect(loadHttpMaxSessions({} as NodeJS.ProcessEnv)).toBe(50);
+  it("defaults the maximum number of HTTP sessions to 100", () => {
+    expect(loadHttpMaxSessions({} as NodeJS.ProcessEnv)).toBe(100);
   });
 
   it("loads the maximum number of HTTP sessions from env aliases", () => {
